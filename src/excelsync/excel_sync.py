@@ -19,12 +19,13 @@ class ExcelSync:
     Provides functionality for validation, extraction, and conversion.
     """
 
-    def __init__(self, excel_file: Union[str, Path]):
+    def __init__(self, excel_file: Union[str, Path], header_row: int = 1):
         """
         Initialize the ExcelSync object with an Excel file.
 
         Args:
             excel_file: Path to the Excel file
+            header_row: Row number containing headers (default: 1)
         """
         self.excel_file = Path(excel_file)
         if not self.excel_file.exists():
@@ -32,8 +33,9 @@ class ExcelSync:
         
         self.workbook = openpyxl.load_workbook(self.excel_file, data_only=True)
         self.schema = ExcelSchema()
+        self.header_row = header_row
     
-    def extract_structure(self) -> Dict[str, Any]:
+    def extract_structure(self, header_row: Optional[int] = None) -> Dict[str, Any]:
         """
         Extract the structure of the Excel file including:
         - Sheet names
@@ -43,15 +45,23 @@ class ExcelSync:
         - Named ranges
         - Cell formats
         
+        Args:
+            header_row: Override the header row (default: use the instance's header_row)
+            
         Returns:
             Dict containing the structure of the Excel file
         """
+        # Use the provided header_row or fall back to the instance's header_row
+        header_row = header_row if header_row is not None else self.header_row
+        data_row = header_row + 1  # Assume data starts in the row after headers
+        
         structure = {
             "sheets": {},
             "named_ranges": {},
             "file_properties": {
                 "filename": self.excel_file.name,
-                "sheet_count": len(self.workbook.sheetnames)
+                "sheet_count": len(self.workbook.sheetnames),
+                "header_row": header_row
             }
         }
         
@@ -70,11 +80,11 @@ class ExcelSync:
                 "merged_cells": [str(merged_cell) for merged_cell in sheet.merged_cells],
             }
             
-            # Extract header row (assuming first row contains headers)
-            if sheet.max_row > 0 and sheet.max_column > 0:
+            # Extract header row (from the specified header_row)
+            if sheet.max_row >= header_row and sheet.max_column > 0:
                 headers = {}
                 for col in range(1, sheet.max_column + 1):
-                    cell = sheet.cell(row=1, column=col)
+                    cell = sheet.cell(row=header_row, column=col)
                     if cell.value:
                         headers[col] = {
                             "name": str(cell.value),
@@ -83,10 +93,10 @@ class ExcelSync:
                 
                 sheet_structure["headers"] = headers
                 
-                # Detect data types for columns based on first data row
-                if sheet.max_row > 1:
+                # Detect data types for columns based on the first data row
+                if sheet.max_row >= data_row:
                     for col in headers:
-                        first_value = sheet.cell(row=2, column=col).value
+                        first_value = sheet.cell(row=data_row, column=col).value
                         data_type = self._detect_data_type(first_value)
                         headers[col]["data_type"] = data_type
             
@@ -120,20 +130,21 @@ class ExcelSync:
         else:
             return str(type(value).__name__)
     
-    def export_structure(self, output_file: Union[str, Path]) -> None:
+    def export_structure(self, output_file: Union[str, Path], header_row: Optional[int] = None) -> None:
         """
         Export the structure of the Excel file to a JSON file.
         
         Args:
             output_file: Path to save the structure file
+            header_row: Override the header row (default: use the instance's header_row)
         """
-        structure = self.extract_structure()
+        structure = self.extract_structure(header_row=header_row)
         
         output_path = Path(output_file)
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(structure, f, indent=2)
     
-    def validate_structure(self, expected_structure: Optional[Dict[str, Any]] = None) -> Tuple[bool, List[str]]:
+    def validate_structure(self, expected_structure: Optional[Dict[str, Any]] = None, header_row: Optional[int] = None) -> Tuple[bool, List[str]]:
         """
         Validate that the Excel file structure matches the expected structure.
         If no expected structure is provided, it validates against the structure
@@ -141,17 +152,25 @@ class ExcelSync:
         
         Args:
             expected_structure: Optional dictionary with expected structure
+            header_row: Override the header row (default: use the instance's header_row)
             
         Returns:
             Tuple of (is_valid, list_of_issues)
         """
-        current_structure = self.extract_structure()
+        current_structure = self.extract_structure(header_row=header_row)
         
         if expected_structure is None:
             # If we don't have an expected structure, assume the current one is valid
             return True, []
         
         issues = []
+        
+        # Check if header rows match
+        expected_header_row = expected_structure.get("file_properties", {}).get("header_row")
+        current_header_row = current_structure.get("file_properties", {}).get("header_row")
+        
+        if expected_header_row is not None and current_header_row is not None and expected_header_row != current_header_row:
+            issues.append(f"Header row mismatch: expected row {expected_header_row}, got row {current_header_row}")
         
         # Check if all expected sheets exist
         for sheet_name in expected_structure.get("sheets", {}):
@@ -178,12 +197,13 @@ class ExcelSync:
         
         return len(issues) == 0, issues
     
-    def compare_structure(self, structure_file: Union[str, Path]) -> Tuple[bool, List[str]]:
+    def compare_structure(self, structure_file: Union[str, Path], header_row: Optional[int] = None) -> Tuple[bool, List[str]]:
         """
         Compare the current Excel structure with a previously saved structure file.
         
         Args:
             structure_file: Path to the structure file
+            header_row: Override the header row (default: use the instance's header_row)
             
         Returns:
             Tuple of (is_matching, list_of_differences)
@@ -195,16 +215,21 @@ class ExcelSync:
         with open(structure_path, 'r', encoding='utf-8') as f:
             expected_structure = json.load(f)
         
-        return self.validate_structure(expected_structure)
+        return self.validate_structure(expected_structure, header_row=header_row)
     
-    def export_to_yaml(self, output_file: Union[str, Path]) -> None:
+    def export_to_yaml(self, output_file: Union[str, Path], header_row: Optional[int] = None) -> None:
         """
         Export the Excel content to YAML with schema information.
         
         Args:
             output_file: Path to save the YAML file
+            header_row: Override the header row (default: use the instance's header_row)
         """
-        structure = self.extract_structure()
+        # Use the provided header_row or fall back to the instance's header_row
+        header_row = header_row if header_row is not None else self.header_row
+        data_row = header_row + 1  # Assume data starts in the row after headers
+        
+        structure = self.extract_structure(header_row=header_row)
         data = {
             "schema": structure,
             "data": {}
@@ -215,15 +240,15 @@ class ExcelSync:
             sheet = self.workbook[sheet_name]
             sheet_data = []
             
-            # Get headers from first row
+            # Get headers from the specified header row
             headers = {}
             for col in range(1, sheet.max_column + 1):
-                header_value = sheet.cell(row=1, column=col).value
+                header_value = sheet.cell(row=header_row, column=col).value
                 if header_value:
                     headers[col] = str(header_value)
             
-            # Extract data rows
-            for row in range(2, sheet.max_row + 1):
+            # Extract data rows (starting from data_row)
+            for row in range(data_row, sheet.max_row + 1):
                 row_data = {}
                 for col in headers:
                     cell_value = sheet.cell(row=row, column=col).value
@@ -252,5 +277,9 @@ class ExcelSync:
         
         with open(structure_path, 'r', encoding='utf-8') as f:
             structure = json.load(f)
+        
+        # Update the header_row if it's specified in the structure
+        if "file_properties" in structure and "header_row" in structure["file_properties"]:
+            self.header_row = structure["file_properties"]["header_row"]
         
         self.schema.load_structure(structure) 

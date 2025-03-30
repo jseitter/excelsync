@@ -61,6 +61,51 @@ def sample_excel_file():
         os.unlink(temp_path)
 
 
+@pytest.fixture
+def custom_header_row_excel_file():
+    """Create a sample Excel file with headers in row 3."""
+    # Create a temporary Excel file
+    with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as temp:
+        temp_path = temp.name
+    
+    # Create a workbook with test data
+    wb = openpyxl.Workbook()
+    
+    # Add data to default sheet
+    sheet = wb.active
+    sheet.title = "CustomHeaderSheet"
+    
+    # Add some title or metadata in rows 1-2
+    sheet["A1"] = "EXAMPLE COMPANY"
+    sheet["A2"] = "Employee Database"
+    
+    # Add headers in row 3
+    sheet["A3"] = "ID"
+    sheet["B3"] = "Name"
+    sheet["C3"] = "Age"
+    sheet["D3"] = "Date"
+    
+    # Add data starting from row 4
+    sheet["A4"] = 1
+    sheet["B4"] = "John Doe"
+    sheet["C4"] = 30
+    sheet["D4"] = "2023-01-01"
+    
+    sheet["A5"] = 2
+    sheet["B5"] = "Jane Smith"
+    sheet["C5"] = 28
+    sheet["D5"] = "2023-02-15"
+    
+    # Save the workbook
+    wb.save(temp_path)
+    
+    yield temp_path
+    
+    # Clean up
+    if os.path.exists(temp_path):
+        os.unlink(temp_path)
+
+
 def test_init(sample_excel_file):
     """Test initialization of ExcelSync."""
     excel_sync = ExcelSync(sample_excel_file)
@@ -68,6 +113,7 @@ def test_init(sample_excel_file):
     assert len(excel_sync.workbook.sheetnames) == 2
     assert "Sheet1" in excel_sync.workbook.sheetnames
     assert "Sheet2" in excel_sync.workbook.sheetnames
+    assert excel_sync.header_row == 1  # Default header row
 
 
 def test_extract_structure(sample_excel_file):
@@ -145,6 +191,102 @@ def test_export_to_yaml(sample_excel_file):
     
     # Verify the file exists
     assert os.path.exists(temp_path)
+    
+    # Clean up
+    os.unlink(temp_path)
+
+
+def test_custom_header_row(custom_header_row_excel_file):
+    """Test using a custom header row."""
+    # Initialize with header_row=3
+    excel_sync = ExcelSync(custom_header_row_excel_file, header_row=3)
+    structure = excel_sync.extract_structure()
+    
+    assert "sheets" in structure
+    assert "CustomHeaderSheet" in structure["sheets"]
+    assert structure["file_properties"]["header_row"] == 3
+    
+    sheet = structure["sheets"]["CustomHeaderSheet"]
+    assert "headers" in sheet
+    assert len(sheet["headers"]) == 4
+    assert sheet["headers"][1]["name"] == "ID"
+    assert sheet["headers"][2]["name"] == "Name"
+    assert sheet["headers"][3]["name"] == "Age"
+    assert sheet["headers"][4]["name"] == "Date"
+    
+    # Verify data types are detected from row 4 (header_row + 1)
+    assert sheet["headers"][1]["data_type"] == "integer"
+    assert sheet["headers"][2]["data_type"] == "string"
+    assert sheet["headers"][3]["data_type"] == "integer"
+
+
+def test_override_header_row(custom_header_row_excel_file):
+    """Test overriding the header row in method calls."""
+    # Initialize with default header_row=1
+    excel_sync = ExcelSync(custom_header_row_excel_file)
+    
+    # But extract structure with header_row=3
+    structure = excel_sync.extract_structure(header_row=3)
+    
+    assert structure["file_properties"]["header_row"] == 3
+    sheet = structure["sheets"]["CustomHeaderSheet"]
+    assert "headers" in sheet
+    assert len(sheet["headers"]) == 4
+    assert sheet["headers"][1]["name"] == "ID"
+    assert sheet["headers"][2]["name"] == "Name"
+    
+    # Check that the instance's header_row is still 1
+    assert excel_sync.header_row == 1
+    
+    # Export to YAML with header_row=3
+    with tempfile.NamedTemporaryFile(suffix='.yaml', delete=False) as temp:
+        temp_path = temp.name
+    
+    excel_sync.export_to_yaml(temp_path, header_row=3)
+    
+    # Verify the file exists
+    assert os.path.exists(temp_path)
+    
+    # Clean up
+    os.unlink(temp_path)
+
+
+def test_header_row_validation(custom_header_row_excel_file):
+    """Test validation with different header rows."""
+    excel_sync = ExcelSync(custom_header_row_excel_file, header_row=3)
+    structure = excel_sync.extract_structure()
+    
+    # Structure should be valid against itself
+    is_valid, issues = excel_sync.validate_structure(structure)
+    assert is_valid
+    assert len(issues) == 0
+    
+    # Modify the header row and validate
+    modified_structure = structure.copy()
+    modified_structure["file_properties"]["header_row"] = 4
+    
+    is_valid, issues = excel_sync.validate_structure(modified_structure)
+    assert not is_valid
+    assert len(issues) > 0
+    assert any("Header row mismatch" in issue for issue in issues)
+
+
+def test_save_and_load_structure_with_header_row(custom_header_row_excel_file):
+    """Test saving and loading structure with header row information."""
+    excel_sync = ExcelSync(custom_header_row_excel_file, header_row=3)
+    
+    with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as temp:
+        temp_path = temp.name
+    
+    excel_sync.export_structure(temp_path)
+    
+    # Create a new instance with default header_row=1
+    new_excel_sync = ExcelSync(custom_header_row_excel_file)
+    assert new_excel_sync.header_row == 1
+    
+    # Load the structure, which should update the header_row
+    new_excel_sync.load_structure(temp_path)
+    assert new_excel_sync.header_row == 3
     
     # Clean up
     os.unlink(temp_path) 
