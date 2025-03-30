@@ -40,7 +40,8 @@ jobs:
     
     - name: Type check with mypy
       run: |
-        pip install mypy
+        pip install mypy types-openpyxl types-PyYAML types-jsonschema
+        # Run mypy using the project configuration
         mypy src/
     
     - name: Test with pytest
