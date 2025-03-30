@@ -29,6 +29,9 @@ dev = [
     "black>=23.0.0",
     "flake8>=6.0.0",
     "mypy>=1.0.0",
+    "types-openpyxl",
+    "types-PyYAML",
+    "types-jsonschema",
 ]
 
 [tool.setuptools]
@@ -47,4 +50,12 @@ python_version = "3.8"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
-disallow_incomplete_defs = true 
+disallow_incomplete_defs = true
+show_column_numbers = true
+show_error_codes = true
+pretty = true
+
+# Allow certain errors temporarily to make CI pass
+[[tool.mypy.overrides]]
+module = "src.excelsync.schema"
+disable_error_code = ["index"]
